@@ -58,17 +58,54 @@ Levanta todo el sistema desde un clon limpio: PostgreSQL, esquema
 
 ### Primer administrador (instalación limpia)
 
-La creación del admin es **interactiva por diseño** (la contraseña se pide por
-stdin con `getpass`, nunca por argumentos ni por defecto en el repo). Una vez
-levantados los servicios, ejecutar:
+Existen dos mecanismos equivalentes y seguros; el bootstrap automático es el
+recomendado para Compose.
+
+**Opción A — bootstrap automático (recomendado, idempotente).** Definir en el
+`.env` local (nunca versionado) las tres variables:
+
+```env
+ADA_ADMIN_EMAIL=admin@ejemplo.com
+ADA_ADMIN_DISPLAY_NAME=Administrador
+ADA_ADMIN_PASSWORD=una-clave-larga-1   # mínimo 12 caracteres, con dígito y letra
+```
+
+El servicio one-shot `bootstrap` (cadena: `postgres` → `migrate` → `bootstrap`)
+crea la cuenta en cada `docker compose up --build`. Garantías: sin las tres
+variables el paso se omite (sin credenciales por defecto); configuración
+parcial falla con error explícito; si el email ya es admin activa es un
+no-op; si existe con otro rol/estado **no se eleva** (falla sin modificar
+datos); jamás se registran secretos en logs. Verificar con:
+
+```bash
+docker compose logs bootstrap   # "Cuenta admin inicial creada" / "ya existe"
+```
+
+**Opción B — CLI interactivo (contraseña por stdin con `getpass`):**
 
 ```bash
 docker compose run --rm api python -m ada_study.cli \
   postgresql+asyncpg://ada:ada_dev_password@postgres:5432/ada_study
 ```
 
-El comando pide email, nombre y contraseña (mínimo 12 caracteres con dígito y
-letra), es idempotente y **no eleva** cuentas existentes silenciosamente.
+> **Nota sobre despliegues previos:** las credenciales de una instalación
+> anterior no sirven aquí: cada proyecto Compose tiene su propio volumen
+> (`ada-study-ef_ada_pgdata` vs `ada-study_ada_pgdata`), aunque la base se
+> llame igual. La tabla `users` de este despliegue nace vacía: hay que
+> provisionar el admin con la Opción A o B.
+>
+> **Recuperación segura** (olvido de contraseña o cuenta bloqueada): el
+> bootstrap no modifica cuentas existentes (por diseño, para no perder datos).
+> Para recuperar el acceso, un operador con acceso a la base puede eliminar
+> SOLO la fila del admin en `users` y re-ejecutar el bootstrap con nuevas
+> variables; los demás usuarios y documentos no se ven afectados:
+>
+> ```bash
+> docker compose exec postgres psql -U ada -d ada_study \
+>   -c "DELETE FROM sessions WHERE user_id = (SELECT user_id FROM users WHERE email = 'admin@ejemplo.com');" \
+>   -c "DELETE FROM users WHERE email = 'admin@ejemplo.com';"
+> docker compose run --rm bootstrap
+> ```
 
 ### Configuración
 

@@ -33,3 +33,8 @@ __pycache__/
 .ruff_cache/
 .ada_storage/
 .coda/tmp/
+
+
+# Configuración y memoria local de desarrollo
+.coda/
+.vscode/

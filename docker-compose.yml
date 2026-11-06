@@ -3,14 +3,20 @@
 #   - PostgreSQL 16 (ADR-0001) con volumen persistente y healthcheck.
 #   - Phoenix 21 (AGENT-TRACE-01 §6): UI de trazas en http://localhost:6006.
 #   - migrate: one-shot idempotente (python -m ada_study.db.create_schema).
+#   - bootstrap: one-shot opcional del admin inicial vía variables de entorno
+#     (ADA_ADMIN_EMAIL / ADA_ADMIN_DISPLAY_NAME / ADA_ADMIN_PASSWORD en .env;
+#     ver README §Primer administrador). Sin esas variables se omite (exit 0).
 #   - api / worker / ui: imagen única ada-study-app, distintos comandos.
-# La base se inicializa sola; el admin inicial se crea con:
+# Alternativa interactiva (contraseña por stdin con getpass):
 #   docker compose run --rm api python -m ada_study.cli \
 #     postgresql+asyncpg://ada:ada_dev_password@postgres:5432/ada_study
+#
+# Sin container_name fijos: Compose deriva los nombres del proyecto
+# (<carpeta>-<servicio-N>), evitando colisiones con instalaciones previas
+# del mismo stack bajo otro proyecto (p. ej. ADA-Study con ada_study_*).
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: ada_study_postgres
     environment:
       POSTGRES_USER: ada
       POSTGRES_PASSWORD: ada_dev_password
@@ -34,7 +40,6 @@ services:
   # API key en el header del exportador OTLP).
   phoenix:
     image: arizephoenix/phoenix:latest
-    container_name: ada_study_phoenix
     environment:
       PHOENIX_ENABLE_AUTH: "false"
     ports:
@@ -57,10 +62,29 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # One-shot opcional: alta segura e idempotente del administrador inicial
+  # (python -m ada_study.bootstrap_admin). Se activa SOLO con las variables
+  # ADA_ADMIN_* en .env (nunca con credenciales por defecto en el repo); sin
+  # ellas el paso se omite. Si el email ya es admin activa es un no-op; si
+  # existe con otro rol/estado NO se eleva (exit 1, sin modificar datos).
+  bootstrap:
+    image: ada-study-app:latest
+    command: python -m ada_study.bootstrap_admin
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+asyncpg://ada:ada_dev_password@postgres:5432/ada_study
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
   # API FastAPI mediante la factory existente (create_app), puerto 8000.
   api:
     image: ada-study-app:latest
-    container_name: ada_study_api
     command: uvicorn ada_study.api.app:create_app --factory --host 0.0.0.0 --port 8000
     env_file:
       - path: .env
@@ -94,7 +118,6 @@ services:
   # Worker de ingesta (entrypoint real: worker_cli, loop continuo).
   worker:
     image: ada-study-app:latest
-    container_name: ada_study_worker
     command: sh -c 'python -m ada_study.worker_cli "$$DATABASE_URL"'
     env_file:
       - path: .env
@@ -114,7 +137,6 @@ services:
   # UI Streamlit: llama a la API desde la red interna (ADA_API_BASE_URL).
   ui:
     image: ada-study-app:latest
-    container_name: ada_study_ui
     command: streamlit run src/ada_study/ui/app.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
     environment:
       ADA_API_BASE_URL: http://api:8000
